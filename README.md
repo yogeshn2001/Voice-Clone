@@ -42,7 +42,7 @@ Before cloning and running the project, ensure your machine has the following to
 
 ```bash
 # Clone the repository via Git
-git clone https://github.com/your-org/Voice-Clone.git
+git clone https://github.com/yogeshn2001/Voice-Clone.git
 
 # Enter the project directory
 cd Voice-Clone
