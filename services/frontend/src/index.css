@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-cyber-950 text-slate-100;
+  }
+}
+
+/* Custom scrollbars for cyber look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0d131d;
+}
+::-webkit-scrollbar-thumb {
+  background: #1f314a;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2d4769;
+}
+

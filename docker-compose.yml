@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # In-Memory State & Pub/Sub Bus
+  redis:
+    image: redis:7-alpine
+    container_name: voice-clone-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - voice-mesh
+
+  # Telephony Ingestion & Dynamic Challenge Gateway (Node.js/Fastify)
+  gateway:
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    container_name: voice-clone-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - REDIS_URL=redis://redis:6379
+      - ACOUSTIC_ENGINE_URL=http://acoustic-engine:8001
+      - ACOUSTIC_ENGINE_WS_URL=ws://acoustic-engine:8001/ws/analyze
+      - RATE_LIMIT_MAX=120
+      - RATE_LIMIT_WINDOW_MS=60000
+      - HMAC_SECRET=voice-clone-enterprise-secure-hmac-key
+      - CORS_ORIGIN=http://localhost:5173,http://localhost:3000
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - voice-mesh
+    restart: unless-stopped
+
+  # Real-Time Acoustic & Vocoder Anomaly Engine (Python/FastAPI/SciPy)
+  acoustic-engine:
+    build:
+      context: ./services/acoustic-engine
+      dockerfile: Dockerfile
+    container_name: voice-clone-acoustic-engine
+    ports:
+      - "8001:8001"
+    environment:
+      - SAMPLE_RATE=16000
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - voice-mesh
+    restart: unless-stopped
+
+  # Agent Command Center UI (Vite / React / Tailwind)
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+    container_name: voice-clone-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_GATEWAY_WS_URL=ws://localhost:8000
+    depends_on:
+      - gateway
+    networks:
+      - voice-mesh
+    restart: unless-stopped
+
+networks:
+  voice-mesh:
+    driver: bridge
+
