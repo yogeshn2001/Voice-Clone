@@ -88,13 +88,24 @@ export const App: React.FC = () => {
 
   // Attempt backend WebSocket connection with auto-reconnect
   useEffect(() => {
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const customWsUrl = (import.meta as any).env?.VITE_GATEWAY_WS_URL;
+
+    // In Vercel / cloud preview without a custom backend URL, run directly in high-speed cloud demo mode
+    if (!isLocal && !customWsUrl) {
+      setIsConnected(true);
+      return;
+    }
+
     let ws: WebSocket | null = null;
+    let timerId: any = null;
+
     const connect = () => {
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const isDev = window.location.port === '5173';
         const wsHost = isDev ? `${window.location.hostname}:8000` : window.location.host;
-        const wsUrl = `${protocol}//${wsHost}/ws/agent/${session.callId}`;
+        const wsUrl = customWsUrl || `${protocol}//${wsHost}/ws/agent/${session.callId}`;
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
@@ -123,8 +134,7 @@ export const App: React.FC = () => {
 
         ws.onclose = () => {
           setIsConnected(false);
-          // Try reconnecting after 4s
-          setTimeout(connect, 4000);
+          timerId = setTimeout(connect, 4000);
         };
 
         ws.onerror = () => {
@@ -140,17 +150,55 @@ export const App: React.FC = () => {
     connect();
 
     return () => {
+      if (timerId) clearTimeout(timerId);
       if (ws) ws.close();
     };
   }, [session.callId]);
+
+  const dispatchLocalFallbackChallenge = (category: ChallengeCategory, forceHighRisk: boolean) => {
+    const fallbackPrompts: Record<ChallengeCategory, string> = {
+      pacing_disruption: "Immediately after you hear me say 'NOW', say 'FIVE'. Ready... NOW!",
+      cognitive_puzzle: "To verify identity: spell the word 'TRUST' backwards phonetically.",
+      phonetic_stress: "Security check: please hum once, then say 'Tick-Tock-Pop'.",
+      semantic_inversion: "What color is the clear day sky? Answer with an intentionally wrong color.",
+    };
+    const chg: VerificationChallenge = {
+      id: `chg_${Math.floor(Math.random() * 9000 + 1000)}`,
+      category,
+      promptText: fallbackPrompts[category],
+      instructionForAgent: "Read prompt aloud clearly. Measure millisecond speech onset.",
+      expectedTokens: ['token'],
+      expectedLatencyMinMs: 200,
+      expectedLatencyMaxMs: 450,
+      maxToleratedLagMs: forceHighRisk ? 600 : 750,
+      difficulty: forceHighRisk ? 'high_risk' : 'standard',
+      entropyScore: 0.94,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 45000,
+    };
+    setSession((prev) => ({ ...prev, activeChallenge: chg, status: 'evaluating' }));
+    addSiemLog('CHALLENGE_ISSUED', 'INFO', `Challenge ${chg.id} dispatched to line.`);
+  };
 
   // Handle Triggering Challenge
   const handleTriggerChallenge = (category: ChallengeCategory, forceHighRisk: boolean) => {
     setIsTriggering(true);
 
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const customApiUrl = (import.meta as any).env?.VITE_GATEWAY_API_URL;
+
+    // If on Vercel without custom backend, dispatch directly
+    if (!isLocal && !customApiUrl) {
+      setTimeout(() => {
+        dispatchLocalFallbackChallenge(category, forceHighRisk);
+        setIsTriggering(false);
+      }, 250);
+      return;
+    }
+
     // Try posting to REST backend
     const isDev = window.location.port === '5173';
-    const apiBase = isDev ? `http://${window.location.hostname}:8000` : '';
+    const apiBase = customApiUrl || (isDev ? `http://${window.location.hostname}:8000` : '');
     fetch(`${apiBase}/api/challenges/trigger`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -164,29 +212,7 @@ export const App: React.FC = () => {
         }
       })
       .catch(() => {
-        // Fallback local challenge generation if backend not currently running
-        const fallbackPrompts: Record<ChallengeCategory, string> = {
-          pacing_disruption: "Immediately after you hear me say 'NOW', say 'FIVE'. Ready... NOW!",
-          cognitive_puzzle: "To verify identity: spell the word 'TRUST' backwards phonetically.",
-          phonetic_stress: "Security check: please hum once, then say 'Tick-Tock-Pop'.",
-          semantic_inversion: "What color is the clear day sky? Answer with an intentionally wrong color.",
-        };
-        const chg: VerificationChallenge = {
-          id: `chg_${Math.floor(Math.random() * 9000 + 1000)}`,
-          category,
-          promptText: fallbackPrompts[category],
-          instructionForAgent: "Read prompt aloud clearly. Measure millisecond speech onset.",
-          expectedTokens: ['token'],
-          expectedLatencyMinMs: 200,
-          expectedLatencyMaxMs: 450,
-          maxToleratedLagMs: forceHighRisk ? 600 : 750,
-          difficulty: forceHighRisk ? 'high_risk' : 'standard',
-          entropyScore: 0.94,
-          createdAt: Date.now(),
-          expiresAt: Date.now() + 45000,
-        };
-        setSession((prev) => ({ ...prev, activeChallenge: chg, status: 'evaluating' }));
-        addSiemLog('CHALLENGE_ISSUED', 'INFO', `Challenge ${chg.id} dispatched in standalone fallback mode.`);
+        dispatchLocalFallbackChallenge(category, forceHighRisk);
       })
       .finally(() => {
         setIsTriggering(false);
@@ -350,9 +376,19 @@ export const App: React.FC = () => {
               ) : (
                 <WifiOff className="w-3.5 h-3.5 text-cyan-400" />
               )}
-              <span>{isConnected ? 'Gateway Mesh: LIVE' : 'Interactive Demo Mode'}</span>
+              <span>
+                {window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+                  ? 'Vercel Cloud Demo: ACTIVE'
+                  : isConnected
+                  ? 'Gateway Mesh: LIVE'
+                  : 'Interactive Demo Mode'}
+              </span>
             </div>
-            <span className="text-slate-500">Latency: 12ms</span>
+            <span className="text-slate-500">
+              {window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+                ? 'Edge CDN'
+                : 'Latency: 12ms'}
+            </span>
           </div>
         </div>
       </main>
